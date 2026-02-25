@@ -1,0 +1,11 @@
+.DS_Store
+*.log
+*.tmp
+*.ps1~
+*.Tests.ps1.testresults.xml
+TestResults/
+.vscode/
+*.pfx
+*.key
+credentials.json
+*.env

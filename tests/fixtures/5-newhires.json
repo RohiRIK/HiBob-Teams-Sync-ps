@@ -1,0 +1,59 @@
+{
+  "employees": [
+    {
+      "id": "emp-001",
+      "firstName": "John",
+      "surname": "Smith",
+      "email": "john.smith@company.com",
+      "work": {
+        "startDate": "2026-02-20",
+        "title": "Software Engineer",
+        "department": "Engineering"
+      }
+    },
+    {
+      "id": "emp-002",
+      "firstName": "Jane",
+      "surname": "Doe",
+      "email": "jane.doe@company.com",
+      "work": {
+        "startDate": "2026-02-18",
+        "title": "Product Manager",
+        "department": "Product"
+      }
+    },
+    {
+      "id": "emp-003",
+      "firstName": "Bob",
+      "surname": "Johnson",
+      "email": "bob.johnson@company.com",
+      "work": {
+        "startDate": "2026-02-15",
+        "title": "Designer",
+        "department": "Design"
+      }
+    },
+    {
+      "id": "emp-004",
+      "firstName": "Alice",
+      "surname": "Williams",
+      "email": "alice.williams@company.com",
+      "work": {
+        "startDate": "2026-02-22",
+        "title": "QA Engineer",
+        "department": "Quality Assurance"
+      }
+    },
+    {
+      "id": "emp-005",
+      "firstName": "Charlie",
+      "surname": "Brown",
+      "email": "charlie.brown@company.com",
+      "work": {
+        "startDate": "2026-02-24",
+        "title": "DevOps Engineer",
+        "department": "Infrastructure"
+      }
+    }
+  ]
+}
