@@ -1,6 +1,8 @@
 # Invoke-Sync.ps1
 # Entry point for Jenkins to run the sync
 
+$ErrorActionPreference = "Stop"
+
 param (
     [switch]$DryRun = ([System.Convert]::ToBoolean($env:IS_DRY_RUN)),
     [string]$TestUser = $env:TEST_USER_EMAIL

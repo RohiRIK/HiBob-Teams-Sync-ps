@@ -20,6 +20,7 @@ pipeline {
         DEBUG_MODE = "${params.DEBUG_MODE}"
         MAX_USERS = "${params.MAX_USERS}"
         BUILD_TEST_ONLY = "${params.BUILD_TEST_ONLY}"
+        DOTNET_SYSTEM_GLOBALIZATION_INVARIANT = '1'
     }
 
     stages {
@@ -30,29 +31,27 @@ pipeline {
                         echo "📦 Checking/Installing PowerShell..."
                         sh '''
                             if ! command -v pwsh &> /dev/null; then
-                                # Install PowerShell Core for Linux (Jenkins default)
+                                # Install PowerShell Core in workspace (not /var/jenkins_home/)
                                 curl -L https://github.com/PowerShell/PowerShell/releases/download/v7.4.1/powershell-7.4.1-linux-x64.tar.gz -o /tmp/powershell.tar.gz
-                                mkdir -p /var/jenkins_home/powershell
-                                tar -xvf /tmp/powershell.tar.gz -C /var/jenkins_home/powershell
-                                chmod +x /var/jenkins_home/powershell/pwsh
+                                mkdir -p "${WORKSPACE}/HiBobTeamsSync/tools"
+                                tar -xvf /tmp/powershell.tar.gz -C "${WORKSPACE}/HiBobTeamsSync/tools"
+                                chmod +x "${WORKSPACE}/HiBobTeamsSync/tools/pwsh"
                             fi
-                            export PATH="/var/jenkins_home/powershell:$PATH"
-                            export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
                         '''
-                    }
                     }
                 }
             }
         }
 
         stage('Execute Sync') {
+            environment {
+                PATH = "${WORKSPACE}/HiBobTeamsSync/tools:${env.PATH}"
+            }
             steps {
                 script {
                     dir('HiBobTeamsSync') {
                         echo "⚡ Executing PowerShell Logic..."
                         sh '''
-                            export PATH="/var/jenkins_home/powershell:$PATH"
-                            export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
                             pwsh -File src/powershell/Invoke-Sync.ps1
                         '''
                     }
