@@ -1,12 +1,12 @@
 # Invoke-Sync.ps1
 # Entry point for Jenkins to run the sync
 
-$ErrorActionPreference = "Stop"
-
 param (
-    [switch]$DryRun = ([System.Convert]::ToBoolean($env:IS_DRY_RUN)),
+    [bool]$DryRun = ($env:IS_DRY_RUN -eq 'true'),
     [string]$TestUser = $env:TEST_USER_EMAIL
 )
+
+$ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Import-Module "$ScriptDir/HiBobSync.psm1" -Force
@@ -18,6 +18,9 @@ if (-not $env:HIBOB_TOKEN -or -not $env:ENTRAID_CLIENT_ID) {
     Write-Log "ERROR" $CTX "Missing required environment variables."
     exit 1
 }
+
+$MaxUsers = [int]$env:MAX_USERS
+if ($MaxUsers -lt 0) { $MaxUsers = 0 }  # treat negative as unlimited
 
 if ($DryRun) { Write-Log "WARN" $CTX "⚠️ MODE: DRY RUN (Safe Mode)" }
 if ($TestUser) { Write-Log "INFO" $CTX "🎯 Targeted Test Mode: $TestUser" }
@@ -47,17 +50,5 @@ if (-not $DryRun) {
     Write-Log "INFO" $CTX "Skipping Graph Auth (Dry Run)"
 }
 
-# 3. Loop
-foreach ($Emp in $Employees) {
-    if (-not $Emp.email) { 
-        Write-Log "WARN" $CTX "Skipping user $($Emp.id) - No Email"
-        continue 
-    }
-
-    if ($env:DO_SYNC_AVATARS -eq 'true') {
-        $AvatarUrl = Get-HiBobAvatar -Token $env:HIBOB_TOKEN -Id $Emp.id
-        if ($AvatarUrl) {
-            Set-TeamsPhoto -Email $Emp.email -AvatarUrl $AvatarUrl -DryRun:$DryRun
-        }
-    }
-}
+# 3. Sync
+Invoke-EmployeeSync -Employees $Employees -Token $env:HIBOB_TOKEN -MaxUsers $MaxUsers -DryRun:$DryRun
