@@ -67,10 +67,9 @@ PUT https://graph.microsoft.com/v1.0/users/{email}/photo/$value
 
 | Parameter | Description |
 | :--- | :--- |
-| **TEST_USER_EMAIL** | Single email for testing |
-| **DRY_RUN** | Logs changes without writing |
-| **SYNC_AVATARS** | Toggle avatar sync on/off |
-| **DEBUG_MODE** | Verbose logging |
+| **TEST_USER_EMAIL** | Single email for testing. Leave empty to process all users. |
+| **DRY_RUN** | If checked, logs all intended changes without writing to Microsoft 365 or syncing avatars. Default: true. |
+| **MAX_USERS** | Maximum number of users to process per run. Set to 0 for unlimited (default). |
 
 ## 🔐 Credentials (Jenkins Vault)
 
@@ -91,18 +90,13 @@ PUT https://graph.microsoft.com/v1.0/users/{email}/photo/$value
 
 ```
 HiBobTeamsSync/
-├── HiBobTeamsSync.groovy        # Standalone Jenkins pipeline
-├── Sync-HiBobTeams.ps1          # Legacy sync script
-├── Modules/
-│   ├── HiBob.psm1               # HiBob API module
-│   └── Teams.psm1               # Teams API module
+├── HiBobTeamsSync.groovy        # Jenkins pipeline
 ├── src/
-│   ├── Sync-HiBobToTeams.ps1    # Another sync script
 │   └── powershell/
 │       ├── Invoke-Sync.ps1      # Main entry point
 │       └── HiBobSync.psm1       # Sync module (functions)
 ├── tests/
-│   ├── Sync-HiBobTeams.Tests.ps1
+│   ├── HiBobSync.Tests.ps1      # Active module tests
 │   ├── helpers/
 │   │   └── TestHelpers.psm1
 │   ├── mocks/
@@ -111,5 +105,24 @@ HiBobTeamsSync/
 │   └── fixtures/
 │       ├── 0-newhires.json
 │       └── 5-newhires.json
-Jenkinsfile                     # Main Jenkins pipeline
 ```
+
+## 🚀 Jenkins Setup
+
+For a full step-by-step guide on wiring this pipeline to a GitHub repository (plugins, credentials, job config, first run, scheduling), see:
+
+👉 **[Jenkins Full Setup Guide](./docs/jenkins-setup.md)**
+
+### Quick checklist
+
+1. Install Jenkins plugins: **Pipeline**, **Git**, **Credentials Binding**
+2. Install PowerShell Core (`pwsh`) on the Jenkins agent
+3. Add 4 credentials to Jenkins vault (`hibob-api-token`, `azure-app-client-id`, `azure-app-client-secret`, `azure-tenant-id`)
+4. Create a **Pipeline** job → **Pipeline script from SCM** → point to this repo → **Script Path:** `HiBobTeamsSync.groovy`
+5. First run: `TEST_USER_EMAIL=your@email.com`, `DRY_RUN=true`, `MAX_USERS=1`
+
+## 🔧 Troubleshooting
+
+For errors during setup or runtime (Jenkins config, HiBob API, Azure/Graph, PowerShell), see:
+
+👉 **[Troubleshooting Guide](./docs/troubleshooting.md)**

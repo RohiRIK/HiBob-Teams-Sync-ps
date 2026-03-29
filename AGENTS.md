@@ -13,10 +13,10 @@ PowerShell-based sync tool that fetches employee data from HiBob (HRIS) and sync
 pwsh -Command "Invoke-Pester ./tests/"
 
 # Run single test file
-pwsh -Command "Invoke-Pester ./tests/Sync-HiBobTeams.Tests.ps1"
+pwsh -Command "Invoke-Pester ./tests/HiBobSync.Tests.ps1"
 
 # Run single test by name
-pwsh -Command "Invoke-Pester ./tests/Sync-HiBobTeams.Tests.ps1 -TestName 'Should NOT call HiBob API in dry-run mode'"
+pwsh -Command "Invoke-Pester ./tests/HiBobSync.Tests.ps1 -FullNameFilter '*retry*'"
 
 # Run with coverage
 pwsh -Command "Invoke-Pester ./tests/ -Output Detailed"
@@ -26,13 +26,13 @@ pwsh -Command "Invoke-Pester ./tests/ -Output Detailed"
 
 ```bash
 # Dry-run mode (safe, no API calls)
-pwsh -File ./Sync-HiBobTeams.ps1
+IS_DRY_RUN=true pwsh -File ./src/powershell/Invoke-Sync.ps1
 
 # Production run (requires env vars)
-HIBOB_TOKEN="Bearer xxx" TEAMS_WEBHOOK_URL="https://..." pwsh -File ./Sync-HiBobTeams.ps1
+HIBOB_TOKEN="Bearer xxx" ENTRAID_CLIENT_ID="..." ENTRAID_CLIENT_SECRET="..." ENTRAID_TENANT_ID="..." IS_DRY_RUN=false pwsh -File ./src/powershell/Invoke-Sync.ps1
 
-# Alternative entry point
-pwsh -File ./src/powershell/Invoke-Sync.ps1 -DryRun
+# With user limit
+MAX_USERS=10 IS_DRY_RUN=true pwsh -File ./src/powershell/Invoke-Sync.ps1
 ```
 
 ### Linting
@@ -60,11 +60,11 @@ pwsh -Command "Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error"
 
 | Element | Convention | Example |
 |---------|------------|---------|
-| Functions | Verb-Noun (PascalCase) | `Get-HiBobNewHires`, `Send-TeamsNotification` |
+| Functions | Verb-Noun (PascalCase) | `Get-HiBobEmployees`, `Invoke-EmployeeSync` |
 | Variables | PascalCase or $camelCase | `$HiBobToken`, `$Employees` |
-| Modules | Noun.psm1 | `HiBob.psm1`, `Teams.psm1` |
-| Tests | *.Tests.ps1 | `Sync-HiBobTeams.Tests.ps1` |
-| Parameters | PascalCase | `-Token`, `-ApiUrl` |
+| Modules | Noun.psm1 | `HiBobSync.psm1` |
+| Tests | *.Tests.ps1 | `HiBobSync.Tests.ps1` |
+| Parameters | PascalCase | `-Token`, `-MaxUsers` |
 
 ### Parameters
 
@@ -86,10 +86,10 @@ function Example-Function {
 
 ```powershell
 # Always use -Force when importing modules
-Import-Module -Force "$PSScriptRoot/Modules/HiBob.psm1"
+Import-Module -Force "$PSScriptRoot/HiBobSync.psm1"
 
 # Export functions at end of module
-Export-ModuleMember -Function Get-HiBobNewHires, Send-TeamsNotification
+Export-ModuleMember -Function Get-HiBobEmployees, Invoke-EmployeeSync
 ```
 
 ### Error Handling
@@ -131,6 +131,7 @@ Write-Log "ERROR" "Service" "Failed: $($_.Exception.Message)"
 - Use `Invoke-WebRequest` for downloading files (avatars)
 - Always set `-ContentType "application/json"` for JSON APIs
 - Use descriptive variable names: `$Headers`, `$Body`, `$Response`
+- Wrap API calls with `Invoke-WithRetry` (private helper in HiBobSync.psm1) for transient failure resilience
 
 ### Testing
 
@@ -138,31 +139,32 @@ Use **Pester 5.x** with the following patterns:
 
 ```powershell
 BeforeAll {
-    $Script:ModulesPath = "$PSScriptRoot/../Modules"
+    $Script:ModulePath = "$PSScriptRoot/../src/powershell/HiBobSync.psm1"
+    Import-Module $Script:ModulePath -Force
 }
 
 Describe "Module Tests" {
-    It "Should accept required parameters" {
-        Import-Module "$Script:ModulesPath/HiBob.psm1" -Force
-        $Result = Get-HiBobNewHires -Token "test" -ApiUrl "test" -DryRun
+    It "Should call Get-HiBobAvatar exactly N times" {
+        Mock Get-HiBobAvatar { return 'https://fake.url/avatar.jpg' } -ModuleName HiBobSync
+        Mock Set-TeamsPhoto { } -ModuleName HiBobSync
 
-        $Result | Should -Not -BeNullOrEmpty
-    }
+        $Emps = @(1..5 | ForEach-Object { [PSCustomObject]@{ id="emp-$_"; email="user$_@test.com" } })
+        Invoke-EmployeeSync -Employees $Emps -Token 'test' -MaxUsers 0 -DryRun
 
-    It "Should NOT call API in dry-run mode" {
-        Mock Invoke-RestMethod { } -ParameterFilter { $Uri -match 'hibob' }
-
-        Get-HiBobNewHires -Token "test" -ApiUrl "test" -DryRun
-
-        Should -Invoke Invoke-RestMethod -Times 0
+        Should -Invoke Get-HiBobAvatar -Times 5 -Exactly -ModuleName HiBobSync
     }
 }
 ```
 
+**Key testing rules:**
+- Use `-ModuleName HiBobSync` for mocks when testing functions inside the module
+- Run function execution INSIDE the `It` block (not `BeforeAll`) so `Should -Invoke` counts work
+- Use `Invoke-EmployeeSync` as the testable seam — it's exported and mockable
+
 ### Environment Variables
 
 - Required env vars: `HIBOB_TOKEN`, `ENTRAID_CLIENT_ID`, `ENTRAID_CLIENT_SECRET`, `ENTRAID_TENANT_ID`
-- Optional env vars: `HIBOB_API_URL`, `DRY_RUN`, `DEBUG_MODE`
+- Optional env vars: `IS_DRY_RUN` (default: true), `MAX_USERS` (default: 0 = unlimited), `TEST_USER_EMAIL`
 - Check with: `if (-not $env:VAR_NAME) { Write-Error "Missing..."; exit 1 }`
 
 ### Credential Handling
@@ -175,19 +177,15 @@ Describe "Module Tests" {
 
 ```
 HiBobTeamsSync/
-├── Sync-HiBobTeams.ps1           # Legacy entry point
-├── Modules/
-│   ├── HiBob.psm1               # HiBob API module
-│   └── Teams.psm1               # Teams API module
+├── HiBobTeamsSync.groovy        # Jenkins pipeline
 ├── src/powershell/
-│   ├── Invoke-Sync.ps1          # Main entry point
+│   ├── Invoke-Sync.ps1          # Main entry point (thin orchestrator)
 │   └── HiBobSync.psm1           # Sync module with Graph SDK
 ├── tests/
-│   ├── Sync-HiBobTeams.Tests.ps1
+│   ├── HiBobSync.Tests.ps1      # Active module tests
 │   ├── helpers/TestHelpers.psm1
 │   ├── mocks/
 │   └── fixtures/
-└── HiBobTeamsSync.groovy        # Jenkins pipeline
 ```
 
 ## Secrets & Security
@@ -233,7 +231,7 @@ Export-ModuleMember -Function Verb-Noun
 
 ```powershell
 param(
-    [int]$DaysLookback = 7
+    [bool]$DryRun = ($env:IS_DRY_RUN -eq 'true')
 )
 
 # Env var validation
@@ -249,8 +247,18 @@ if (-not $env:HIBOB_TOKEN) {
 ## Jenkins Integration
 
 The pipeline accepts these parameters:
-- `TEST_USER_EMAIL` - Single email for targeted testing
-- `DRY_RUN` - Log changes without writing (default: true)
-- `SYNC_AVATARS` - Toggle avatar sync
-- `DEBUG_MODE` - Verbose logging
-- `MAX_USERS` - Safety limit for processing
+- `TEST_USER_EMAIL` - Single email for targeted testing (leave empty for all users)
+- `DRY_RUN` - Log all changes without writing to Microsoft 365 or syncing avatars (default: true)
+- `MAX_USERS` - Maximum number of users to process per run. 0 = unlimited (default: 0)
+
+## Jenkins Setup
+
+For a full step-by-step guide on setting up the pipeline in Jenkins (plugins, credentials, GitHub connection, first run, scheduling), see:
+
+👉 **[docs/jenkins-setup.md](./docs/jenkins-setup.md)**
+
+## Troubleshooting
+
+For errors during setup or runtime (Jenkins config, HiBob API, Azure/Graph, PowerShell), see:
+
+👉 **[docs/troubleshooting.md](./docs/troubleshooting.md)**
