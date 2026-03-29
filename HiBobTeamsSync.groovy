@@ -3,11 +3,8 @@ pipeline {
 
     parameters {
         string(name: 'TEST_USER_EMAIL', defaultValue: '', description: 'Enter a single email to test the sync safely on one user.')
-        booleanParam(name: 'DRY_RUN', defaultValue: true, description: 'If checked, logs intended changes but does not write to Microsoft 365.')
-        booleanParam(name: 'SYNC_AVATARS', defaultValue: true, description: 'Master toggle for the profile picture sync feature.')
-        booleanParam(name: 'DEBUG_MODE', defaultValue: false, description: 'If checked, enables verbose logging for troubleshooting.')
-        string(name: 'MAX_USERS', defaultValue: '0', description: 'Safety limit: Maximum number of users to process (0 for unlimited).')
-        booleanParam(name: 'BUILD_TEST_ONLY', defaultValue: false, description: 'If checked, runs a mock build test to verify environment without real API calls.')
+        booleanParam(name: 'DRY_RUN', defaultValue: true, description: 'If checked, logs all intended changes without writing to Microsoft 365 or syncing avatars.')
+        string(name: 'MAX_USERS', defaultValue: '0', description: 'Maximum number of users to process per run. Set to 0 for unlimited (default).')
     }
 
     environment {
@@ -16,10 +13,7 @@ pipeline {
         ENTRAID_CLIENT_SECRET = credentials('azure-app-client-secret')
         ENTRAID_TENANT_ID = credentials('azure-tenant-id')
         IS_DRY_RUN = "${params.DRY_RUN}"
-        DO_SYNC_AVATARS = "${params.SYNC_AVATARS}"
-        DEBUG_MODE = "${params.DEBUG_MODE}"
         MAX_USERS = "${params.MAX_USERS}"
-        BUILD_TEST_ONLY = "${params.BUILD_TEST_ONLY}"
         DOTNET_SYSTEM_GLOBALIZATION_INVARIANT = '1'
     }
 
