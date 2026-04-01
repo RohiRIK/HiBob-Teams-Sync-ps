@@ -9,3 +9,7 @@ TestResults/
 *.key
 credentials.json
 *.env
+.sisyphus/
+.claude/
+AGENTS.md
+CLAUDE.md
