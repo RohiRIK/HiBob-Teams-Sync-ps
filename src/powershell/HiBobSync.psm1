@@ -1,21 +1,27 @@
 # HiBobSync.psm1
 # Module for synchronizing HiBob data to Microsoft Teams using Microsoft.Graph SDK
+# Targets: PowerShell 5.1+ (Windows PowerShell) and PowerShell 7.x (Core)
+
+# PS5.1 defaults to TLS 1.0; modern APIs require TLS 1.2+
+if ($PSVersionTable.PSVersion.Major -le 5) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+}
 
 # --- Logging Helper ---
 function Write-Log {
+    [CmdletBinding()]
     param (
-        [string]$Level,
-        [string]$Context,
-        [string]$Message
+        [Parameter(Mandatory)][ValidateSet("INFO","WARN","ERROR")][string]$Level,
+        [Parameter(Mandatory)][string]$Context,
+        [Parameter(Mandatory)][string]$Message
     )
     $Timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ss.fffZ"
-    $Color = switch ($Level) {
-        "INFO"  { "White" }
-        "WARN"  { "Yellow" }
-        "ERROR" { "Red" }
-        Default { "White" }
+    $Formatted = "[$Timestamp] [$Level] [$Context] $Message"
+    switch ($Level) {
+        "ERROR" { Write-Warning $Formatted }
+        "WARN"  { Write-Warning $Formatted }
+        Default { Write-Information $Formatted -InformationAction Continue }
     }
-    Write-Host "[$Timestamp] [$Level] [$Context] $Message" -ForegroundColor $Color
 }
 
 # --- Retry Helper (private) ---
@@ -37,7 +43,8 @@ function Invoke-WithRetry {
 }
 
 function Get-HiBobEmployees {
-    param ([string]$Token)
+    [CmdletBinding()]
+    param ([Parameter(Mandatory)][string]$Token)
     Write-Log "INFO" "HiBobService" "Fetching employees..."
     try {
         $Headers = @{ "Authorization" = $Token }
@@ -52,7 +59,11 @@ function Get-HiBobEmployees {
 }
 
 function Get-HiBobAvatar {
-    param ([string]$Token, [string]$Id)
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$Id
+    )
     try {
         $Headers = @{ "Authorization" = $Token }
         $Response = Invoke-WithRetry -OperationName "Get-HiBobAvatar($Id)" -Action {
@@ -65,7 +76,12 @@ function Get-HiBobAvatar {
 }
 
 function Connect-ToGraph {
-    param ([string]$ClientId, [string]$ClientSecret, [string]$TenantId)
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)][string]$ClientId,
+        [Parameter(Mandatory)][string]$ClientSecret,
+        [Parameter(Mandatory)][string]$TenantId
+    )
     Write-Log "INFO" "GraphService" "Authenticating to Microsoft Graph..."
 
     $SecureSecret = $ClientSecret | ConvertTo-SecureString -AsPlainText -Force
@@ -79,9 +95,10 @@ function Connect-ToGraph {
 }
 
 function Set-TeamsPhoto {
+    [CmdletBinding()]
     param (
-        [string]$Email,
-        [string]$AvatarUrl,
+        [Parameter(Mandatory)][string]$Email,
+        [Parameter(Mandatory)][string]$AvatarUrl,
         [switch]$DryRun
     )
 
@@ -107,9 +124,10 @@ function Set-TeamsPhoto {
 }
 
 function Invoke-EmployeeSync {
+    [CmdletBinding()]
     param (
-        [array]$Employees,
-        [string]$Token,
+        [Parameter(Mandatory)][array]$Employees,
+        [Parameter(Mandatory)][string]$Token,
         [int]$MaxUsers = 0,
         [switch]$DryRun
     )

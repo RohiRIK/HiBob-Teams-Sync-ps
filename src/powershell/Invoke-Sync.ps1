@@ -1,12 +1,15 @@
+#Requires -Version 5.1
+
 # Invoke-Sync.ps1
 # Entry point for Jenkins to run the sync
 
+[CmdletBinding()]
 param (
     [bool]$DryRun = ($env:IS_DRY_RUN -eq 'true'),
     [string]$TestUser = $env:TEST_USER_EMAIL
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Import-Module "$ScriptDir/HiBobSync.psm1" -Force

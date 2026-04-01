@@ -1,5 +1,21 @@
 # HiBobSync.Tests.ps1
 
+Describe "PS5.1 Compatibility" {
+    It "Module loads without errors" {
+        { Import-Module "$PSScriptRoot/../src/powershell/HiBobSync.psm1" -Force } | Should -Not -Throw
+    }
+
+    It "Entry point requires PS 5.1" {
+        $content = Get-Content "$PSScriptRoot/../src/powershell/Invoke-Sync.ps1" -Raw
+        $content | Should -Match '#Requires -Version 5\.1'
+    }
+
+    It "Module enforces TLS 1.2 for PS5" {
+        $content = Get-Content "$PSScriptRoot/../src/powershell/HiBobSync.psm1" -Raw
+        $content | Should -Match 'Tls12'
+    }
+}
+
 BeforeAll {
     $Script:ModulePath = "$PSScriptRoot/../src/powershell/HiBobSync.psm1"
     Import-Module $Script:ModulePath -Force
