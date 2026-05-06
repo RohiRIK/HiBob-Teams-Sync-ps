@@ -69,4 +69,10 @@ if (-not $DryRun) {
 }
 
 # 3. Sync
-Invoke-EmployeeSync -Employees $Employees -Token $env:HIBOB_TOKEN -MaxUsers $MaxUsers -DryRun:$DryRun
+$Summary = Invoke-EmployeeSync -Employees $Employees -Token $env:HIBOB_TOKEN -MaxUsers $MaxUsers -DryRun:$DryRun
+
+# Exit code signals build status to Jenkins: 0=success, 2=partial failure
+if ($Summary.Failed -gt 0) {
+    Write-Log "WARN" $CTX "⚠️ $($Summary.Failed) user(s) failed to sync"
+    exit 2
+}

@@ -82,7 +82,16 @@ pipeline {
             steps {
                 script {
                     dir('HiBobTeamsSync') {
-                        sh 'pwsh -File src/powershell/Invoke-Sync.ps1'
+                        def exitCode = sh(script: 'pwsh -File src/powershell/Invoke-Sync.ps1', returnStatus: true)
+                        if (exitCode == 2) {
+                            currentBuild.result = 'UNSTABLE'
+                            currentBuild.description = "Partial failure — some users failed to sync"
+                        } else if (exitCode != 0) {
+                            currentBuild.description = "Sync failed (exit code ${exitCode})"
+                            error("Sync failed with exit code ${exitCode}")
+                        } else {
+                            currentBuild.description = "Sync completed successfully"
+                        }
                     }
                 }
             }

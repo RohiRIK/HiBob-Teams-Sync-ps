@@ -1,7 +1,6 @@
 # HiBobSync.psm1
 # Module for synchronizing HiBob data to Microsoft Teams using Microsoft.Graph SDK
 
-# --- Logging Helper ---
 function Write-Log {
     param (
         [string]$Level,
@@ -18,7 +17,6 @@ function Write-Log {
     Write-Host "[$Timestamp] [$Level] [$Context] $Message" -ForegroundColor $Color
 }
 
-# --- Retry Helper (private) ---
 function Invoke-WithRetry {
     param (
         [scriptblock]$Action,
@@ -30,9 +28,33 @@ function Invoke-WithRetry {
             return (& $Action)
         } catch {
             if ($i -eq $MaxRetries) { throw }
+
+            # Extract HTTP status code if available
+            $StatusCode = $null
+            if ($_.Exception.Response) {
+                $StatusCode = [int]$_.Exception.Response.StatusCode
+            }
+
+            # Only retry transient failures: 429 (rate limit), 5xx (server), network errors (no status)
+            $IsTransient = ($null -eq $StatusCode) -or ($StatusCode -eq 429) -or ($StatusCode -ge 500)
+            if (-not $IsTransient) {
+                $SafeMessage = $_.Exception.Message -replace '(?i)Bearer\s+\S+', 'Bearer [REDACTED]' -replace '(?i)Basic\s+\S+', 'Basic [REDACTED]'
+                Write-Log "ERROR" "Retry" "Non-retryable error for ${OperationName} (HTTP $StatusCode): $SafeMessage"
+                throw
+            }
+
+            # Respect Retry-After header on 429
+            $WaitSeconds = [Math]::Pow(2, $i - 1)
+            if ($StatusCode -eq 429 -and $_.Exception.Response.Headers) {
+                $RetryAfter = $_.Exception.Response.Headers['Retry-After']
+                if ($RetryAfter -and [int]::TryParse($RetryAfter, [ref]$null)) {
+                    $WaitSeconds = [Math]::Max($WaitSeconds, [int]$RetryAfter)
+                }
+            }
+
             $SafeMessage = $_.Exception.Message -replace '(?i)Bearer\s+\S+', 'Bearer [REDACTED]' -replace '(?i)Basic\s+\S+', 'Basic [REDACTED]'
-            Write-Log "WARN" "Retry" "Attempt $i/$MaxRetries for ${OperationName}: $SafeMessage"
-            Start-Sleep -Seconds ([Math]::Pow(2, $i - 1))
+            Write-Log "WARN" "Retry" "Attempt $i/$MaxRetries for ${OperationName}: $SafeMessage (waiting ${WaitSeconds}s)"
+            Start-Sleep -Seconds $WaitSeconds
         }
     }
 }
@@ -42,10 +64,31 @@ function Get-HiBobEmployees {
     Write-Log "INFO" "HiBobService" "Fetching employees..."
     try {
         $Headers = @{ "Authorization" = $Token }
-        $Response = Invoke-WithRetry -OperationName "Get-HiBobEmployees" -Action {
-            Invoke-RestMethod -Uri "https://api.hibob.com/v1/people/search" -Method Post -Headers $Headers -Body '{"showInactive":false}' -ContentType "application/json" -TimeoutSec 30 -ErrorAction Stop
-        }
-        return $Response.employees
+        $AllEmployees = @()
+        $Cursor = $null
+        $PageSize = 100
+
+        do {
+            $BodyObj = @{ showInactive = $false; pagination = @{ limit = $PageSize } }
+            if ($Cursor) { $BodyObj.pagination.cursor = $Cursor }
+            $JsonBody = $BodyObj | ConvertTo-Json -Depth 3
+
+            $Response = Invoke-WithRetry -OperationName "Get-HiBobEmployees" -Action {
+                Invoke-RestMethod -Uri "https://api.hibob.com/v1/people/search" -Method Post -Headers $Headers -Body $JsonBody -ContentType "application/json" -TimeoutSec 30 -ErrorAction Stop
+            }
+
+            $AllEmployees += $Response.employees
+
+            # Cursor pagination — stop if API doesn't return next_cursor
+            $Cursor = $null
+            if ($Response.PSObject.Properties['response_metadata'] -and $Response.response_metadata.next_cursor) {
+                $Cursor = $Response.response_metadata.next_cursor
+                Write-Log "INFO" "HiBobService" "Fetched $($AllEmployees.Count) employees so far..."
+            }
+        } while ($Cursor)
+
+        Write-Log "INFO" "HiBobService" "Total employees fetched: $($AllEmployees.Count)"
+        return $AllEmployees
     } catch {
         Write-Log "ERROR" "HiBobService" "Failed to fetch employees: $($_.Exception.Message)"
         throw
@@ -69,9 +112,10 @@ function Connect-ToGraph {
     param ([string]$ClientId, [string]$ClientSecret, [string]$TenantId)
     Write-Log "INFO" "GraphService" "Authenticating to Microsoft Graph..."
 
-    $SecureSecret = $ClientSecret | ConvertTo-SecureString -AsPlainText -Force
+    $SecureSecret = ConvertTo-SecureString -String $ClientSecret -AsPlainText -Force
+    $ClientCredential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $ClientId, $SecureSecret
     try {
-        Connect-MgGraph -ClientId $ClientId -TenantId $TenantId -Secret $SecureSecret -NoWelcome -ErrorAction Stop
+        Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $ClientCredential -NoWelcome -ErrorAction Stop
         Write-Log "INFO" "GraphService" "✅ Connected successfully."
     } catch {
         Write-Log "ERROR" "GraphService" "❌ Authentication Failed: $($_.Exception.Message)"
@@ -88,23 +132,57 @@ function Set-TeamsPhoto {
 
     if ($DryRun) {
         Write-Log "INFO" "GraphService" "[DRY RUN] Would update photo for $Email"
-        return
+        return 'dry-run'
     }
 
     try { $AvatarHost = ([System.Uri]::new($AvatarUrl)).Host } catch { $AvatarHost = "unknown" }
     Write-Log "INFO" "GraphService" "Downloading avatar from: $AvatarHost for $Email"
 
-    $TempFile = [System.IO.Path]::GetTempFileName()
+    $TempNewFile = [System.IO.Path]::GetTempFileName()
+    $TempCurrentFile = [System.IO.Path]::GetTempFileName()
     try {
-        Invoke-WithRetry -OperationName "Set-TeamsPhoto($Email)" -Action {
-            Invoke-WebRequest -Uri $AvatarUrl -OutFile $TempFile -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
-            Set-MgUserPhotoContent -UserId $Email -InFile $TempFile -ErrorAction Stop
+        # 1. Download new avatar
+        Invoke-WithRetry -OperationName "Download-Avatar($Email)" -Action {
+            Invoke-WebRequest -Uri $AvatarUrl -OutFile $TempNewFile -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
         }
-        Write-Log "INFO" "GraphService" "✅ Success: Updated photo for $Email"
+
+        # 2. Validate image size (Graph API limit: 4MB)
+        $FileSize = (Get-Item $TempNewFile).Length
+        if ($FileSize -eq 0) {
+            Write-Log "WARN" "GraphService" "Empty avatar file for $Email — skipping"
+            return 'failed'
+        }
+        $MaxSizeBytes = 4 * 1024 * 1024
+        if ($FileSize -gt $MaxSizeBytes) {
+            Write-Log "WARN" "GraphService" "Avatar too large for $Email ($([Math]::Round($FileSize / 1MB, 2))MB > 4MB) — skipping"
+            return 'failed'
+        }
+
+        # 3. Change detection — compare with current Graph photo
+        try {
+            Get-MgUserPhotoContent -UserId $Email -OutFile $TempCurrentFile -ErrorAction Stop
+            $NewHash = (Get-FileHash $TempNewFile -Algorithm MD5).Hash
+            $CurrentHash = (Get-FileHash $TempCurrentFile -Algorithm MD5).Hash
+            if ($NewHash -eq $CurrentHash) {
+                Write-Log "INFO" "GraphService" "Photo unchanged for $Email — skipping"
+                return 'unchanged'
+            }
+        } catch {
+            # No current photo or can't fetch — proceed with upload
+        }
+
+        # 4. Upload to Graph
+        Invoke-WithRetry -OperationName "Upload-Photo($Email)" -Action {
+            Set-MgUserPhotoContent -UserId $Email -InFile $TempNewFile -ErrorAction Stop
+        }
+        Write-Log "INFO" "GraphService" "✅ Updated photo for $Email"
+        return 'uploaded'
     } catch {
         Write-Log "ERROR" "GraphService" "❌ Failed to update $Email : $($_.Exception.Message)"
+        return 'failed'
     } finally {
-        if (Test-Path $TempFile) { Remove-Item $TempFile -Force }
+        if (Test-Path $TempNewFile) { Remove-Item $TempNewFile -Force }
+        if (Test-Path $TempCurrentFile) { Remove-Item $TempCurrentFile -Force }
     }
 }
 
@@ -116,25 +194,37 @@ function Invoke-EmployeeSync {
         [switch]$DryRun
     )
 
-    # Apply MAX_USERS limit
+    $Summary = @{ Uploaded = 0; Unchanged = 0; Failed = 0; NoEmail = 0; NoAvatar = 0 }
+
     if ($MaxUsers -gt 0 -and $Employees.Count -gt $MaxUsers) {
         Write-Log "WARN" "Sync" "⚠️ Limiting to $MaxUsers users (total: $($Employees.Count))"
         $Employees = $Employees | Select-Object -First $MaxUsers
     }
 
-    # Process each employee
     foreach ($Emp in $Employees) {
         if (-not $Emp.email) {
             Write-Log "WARN" "Sync" "Skipping user $($Emp.id) - No Email"
+            $Summary.NoEmail++
             continue
         }
+
         $AvatarUrl = Get-HiBobAvatar -Token $Token -Id $Emp.id
-        if ($AvatarUrl) {
-            Set-TeamsPhoto -Email $Emp.email -AvatarUrl $AvatarUrl -DryRun:$DryRun
+        if (-not $AvatarUrl) {
+            $Summary.NoAvatar++
+            continue
+        }
+
+        $Result = Set-TeamsPhoto -Email $Emp.email -AvatarUrl $AvatarUrl -DryRun:$DryRun
+        switch ($Result) {
+            'uploaded'  { $Summary.Uploaded++ }
+            'unchanged' { $Summary.Unchanged++ }
+            'failed'    { $Summary.Failed++ }
         }
     }
 
-    Write-Log "INFO" "Sync" "✅ Sync complete. Processed: $($Employees.Count) users."
+    $Total = $Employees.Count
+    Write-Log "INFO" "Sync" "✅ Sync complete. Total=$Total Uploaded=$($Summary.Uploaded) Unchanged=$($Summary.Unchanged) Failed=$($Summary.Failed) NoAvatar=$($Summary.NoAvatar) NoEmail=$($Summary.NoEmail)"
+    return $Summary
 }
 
 Export-ModuleMember -Function Get-HiBobEmployees, Get-HiBobAvatar, Connect-ToGraph, Set-TeamsPhoto, Write-Log, Invoke-EmployeeSync
