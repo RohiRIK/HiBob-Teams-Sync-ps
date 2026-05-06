@@ -11,7 +11,6 @@ pipeline {
         timeout(time: 30, unit: 'MINUTES')
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '30'))
-        timestamps()
     }
 
     environment {
@@ -19,9 +18,9 @@ pipeline {
         ENTRAID_CLIENT_ID = credentials('azure-app-client-id')
         ENTRAID_CLIENT_SECRET = credentials('azure-app-client-secret')
         ENTRAID_TENANT_ID = credentials('azure-tenant-id')
-        IS_DRY_RUN = params.DRY_RUN.toString()
-        MAX_USERS = params.MAX_USERS
-        TEST_USER_EMAIL = params.TEST_USER_EMAIL
+        IS_DRY_RUN = "${params.DRY_RUN}"
+        MAX_USERS = "${params.MAX_USERS}"
+        TEST_USER_EMAIL = "${params.TEST_USER_EMAIL}"
         DOTNET_SYSTEM_GLOBALIZATION_INVARIANT = '1'
     }
 
