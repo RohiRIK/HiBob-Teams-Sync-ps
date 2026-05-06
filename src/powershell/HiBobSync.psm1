@@ -30,7 +30,8 @@ function Invoke-WithRetry {
             return (& $Action)
         } catch {
             if ($i -eq $MaxRetries) { throw }
-            Write-Log "WARN" "Retry" "Attempt $i/$MaxRetries for ${OperationName}: $($_.Exception.Message)"
+            $SafeMessage = $_.Exception.Message -replace '(?i)Bearer\s+\S+', 'Bearer [REDACTED]' -replace '(?i)Basic\s+\S+', 'Basic [REDACTED]'
+            Write-Log "WARN" "Retry" "Attempt $i/$MaxRetries for ${OperationName}: $SafeMessage"
             Start-Sleep -Seconds ([Math]::Pow(2, $i - 1))
         }
     }
@@ -42,7 +43,7 @@ function Get-HiBobEmployees {
     try {
         $Headers = @{ "Authorization" = $Token }
         $Response = Invoke-WithRetry -OperationName "Get-HiBobEmployees" -Action {
-            Invoke-RestMethod -Uri "https://api.hibob.com/v1/people/search" -Method Post -Headers $Headers -Body '{"showInactive":false}' -ContentType "application/json" -ErrorAction Stop
+            Invoke-RestMethod -Uri "https://api.hibob.com/v1/people/search" -Method Post -Headers $Headers -Body '{"showInactive":false}' -ContentType "application/json" -TimeoutSec 30 -ErrorAction Stop
         }
         return $Response.employees
     } catch {
@@ -56,7 +57,7 @@ function Get-HiBobAvatar {
     try {
         $Headers = @{ "Authorization" = $Token }
         $Response = Invoke-WithRetry -OperationName "Get-HiBobAvatar($Id)" -Action {
-            Invoke-RestMethod -Uri "https://api.hibob.com/v1/avatars/$Id" -Headers $Headers -ErrorAction Stop
+            Invoke-RestMethod -Uri "https://api.hibob.com/v1/avatars/$Id" -Headers $Headers -TimeoutSec 30 -ErrorAction Stop
         }
         return $Response.avatarUrl
     } catch {
@@ -90,12 +91,13 @@ function Set-TeamsPhoto {
         return
     }
 
+    try { $AvatarHost = ([System.Uri]::new($AvatarUrl)).Host } catch { $AvatarHost = "unknown" }
+    Write-Log "INFO" "GraphService" "Downloading avatar from: $AvatarHost for $Email"
+
     $TempFile = [System.IO.Path]::GetTempFileName()
     try {
         Invoke-WithRetry -OperationName "Set-TeamsPhoto($Email)" -Action {
-            # 1. Download to Temp File
-            Invoke-WebRequest -Uri $AvatarUrl -OutFile $TempFile -UseBasicParsing -ErrorAction Stop
-            # 2. Upload using Graph SDK
+            Invoke-WebRequest -Uri $AvatarUrl -OutFile $TempFile -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
             Set-MgUserPhotoContent -UserId $Email -InFile $TempFile -ErrorAction Stop
         }
         Write-Log "INFO" "GraphService" "✅ Success: Updated photo for $Email"

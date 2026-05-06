@@ -13,14 +13,32 @@ Import-Module "$ScriptDir/HiBobSync.psm1" -Force
 
 $CTX = "Main"
 
-# Validation
-if (-not $env:HIBOB_TOKEN -or -not $env:ENTRAID_CLIENT_ID) {
-    Write-Log "ERROR" $CTX "Missing required environment variables."
+# Validation — always required
+if (-not $env:HIBOB_TOKEN) {
+    Write-Log "ERROR" $CTX "Missing required environment variable: HIBOB_TOKEN"
     exit 1
 }
 
-$MaxUsers = [int]$env:MAX_USERS
-if ($MaxUsers -lt 0) { $MaxUsers = 0 }  # treat negative as unlimited
+# Graph credentials — required for live runs only
+if (-not $DryRun) {
+    $GraphVars = @('ENTRAID_CLIENT_ID', 'ENTRAID_CLIENT_SECRET', 'ENTRAID_TENANT_ID')
+    foreach ($Var in $GraphVars) {
+        if (-not (Get-Item "env:$Var" -ErrorAction SilentlyContinue)) {
+            Write-Log "ERROR" $CTX "Missing required environment variable for live run: $Var"
+            exit 1
+        }
+    }
+}
+
+# Safe MAX_USERS parsing — never crash on bad input
+$MaxUsers = 0
+if ($env:MAX_USERS) {
+    if (-not [int]::TryParse($env:MAX_USERS, [ref]$MaxUsers)) {
+        Write-Log "WARN" $CTX "Invalid MAX_USERS value '$($env:MAX_USERS)', defaulting to 0 (unlimited)"
+        $MaxUsers = 0
+    }
+}
+if ($MaxUsers -lt 0) { $MaxUsers = 0 }
 
 if ($DryRun) { Write-Log "WARN" $CTX "⚠️ MODE: DRY RUN (Safe Mode)" }
 if ($TestUser) { Write-Log "INFO" $CTX "🎯 Targeted Test Mode: $TestUser" }

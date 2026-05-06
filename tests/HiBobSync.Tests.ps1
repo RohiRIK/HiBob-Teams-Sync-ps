@@ -86,6 +86,24 @@ Describe "Set-TeamsPhoto" {
         Should -Invoke Invoke-WebRequest -Times 1 -ModuleName HiBobSync
         Should -Invoke Set-MgUserPhotoContent -Times 1 -ModuleName HiBobSync
     }
+
+    It "Should handle malformed avatar URL without crashing" {
+        Mock Invoke-WebRequest { } -ModuleName HiBobSync
+        Mock Set-MgUserPhotoContent { } -ModuleName HiBobSync
+
+        { Set-TeamsPhoto -Email "user@company.com" -AvatarUrl "not-a-url" } | Should -Not -Throw
+
+        Should -Invoke Invoke-WebRequest -Times 1 -ModuleName HiBobSync
+    }
+
+    It "Should pass TimeoutSec to Invoke-WebRequest" {
+        Mock Invoke-WebRequest { } -ModuleName HiBobSync -ParameterFilter { $TimeoutSec -eq 30 }
+        Mock Set-MgUserPhotoContent { } -ModuleName HiBobSync
+
+        Set-TeamsPhoto -Email "user@company.com" -AvatarUrl "https://cdn.hibob.com/avatar.jpg"
+
+        Should -Invoke Invoke-WebRequest -Times 1 -ModuleName HiBobSync -ParameterFilter { $TimeoutSec -eq 30 }
+    }
 }
 
 Describe "Invoke-WithRetry (retry logic)" {
@@ -114,6 +132,24 @@ Describe "Invoke-WithRetry (retry logic)" {
         Mock Start-Sleep { } -ModuleName HiBobSync
 
         { Get-HiBobEmployees -Token "Bearer test-token" } | Should -Throw
+    }
+
+    It "Should redact Bearer tokens in retry warning logs" {
+        $Script:LogMessages = @()
+        Mock Invoke-RestMethod {
+            throw [System.Exception]::new("Auth failed with Bearer secret-token-value-123")
+        } -ModuleName HiBobSync
+
+        Mock Start-Sleep { } -ModuleName HiBobSync
+        Mock Write-Host { $Script:LogMessages += $Object } -ModuleName HiBobSync
+
+        try { Get-HiBobEmployees -Token "Bearer test-token" } catch { }
+
+        $RetryLogs = $Script:LogMessages | Where-Object { $_ -match 'Retry' }
+        $RetryLogs | ForEach-Object {
+            $_ | Should -Not -Match 'secret-token-value-123'
+            $_ | Should -Match '\[REDACTED\]'
+        }
     }
 }
 
