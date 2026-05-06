@@ -47,6 +47,8 @@ Wait for Jenkins to restart before continuing.
 
 The pipeline runs PowerShell scripts, so `pwsh` must be available on the machine Jenkins uses to run jobs (called an "agent" or "node"). This is usually the same machine Jenkins itself runs on unless you have a separate build server.
 
+> **The pipeline validates this automatically.** The first stage ("Validate Environment") checks that `pwsh` is installed and will print a clear error with an install link if it's missing — the build will fail immediately rather than producing a confusing error later.
+
 **On Ubuntu / Debian:**
 ```bash
 # Add the Microsoft package repo
@@ -70,6 +72,19 @@ pwsh --version
 
 > **Not sure which machine to run this on?**
 > In Jenkins, go to **Manage Jenkins → Nodes**. Your agent is listed there. SSH into that machine and run the commands above.
+
+**Recommended version:** PowerShell 7.4 or later. The pipeline will print a warning if your version is below 7.4, but it will **not** stop the build — it's a heads-up, not a blocker. If you see `WARNING: PowerShell 7.x detected. Recommended: 7.4 or later.` in the console, the sync will still run fine; just consider upgrading when convenient.
+
+### Microsoft.Graph PowerShell Module
+
+For **live runs** (`DRY_RUN=false`), the pipeline also requires the `Microsoft.Graph.Users` PowerShell module to be installed on the agent. The Validate Environment stage checks for this automatically and will fail with a clear error if it's missing.
+
+To install it:
+```bash
+pwsh -Command "Install-Module Microsoft.Graph -Scope CurrentUser -Force"
+```
+
+> **Dry runs skip this check.** If `DRY_RUN=true`, the module check is skipped entirely — you don't need the Graph module installed just to test the pipeline.
 
 ---
 
@@ -293,11 +308,49 @@ Before running on real employees, test on yourself with dry-run on.
 You should see output like:
 ```
 [INFO] [HiBobService] Fetching employees...
+[INFO] [HiBobService] Total employees fetched: 1
+[INFO] [Sync] Processing 1 users...
 [INFO] [GraphService] [DRY RUN] Would update photo for john@yourcompany.com
-[INFO] [Sync] ✅ Sync complete. Processed: 1 users.
+[INFO] [Sync] Sync complete. Total=1 Uploaded=0 Unchanged=0 Failed=0 NoAvatar=0 NoEmail=0
 ```
 
 **If you see that — the setup is working.** Nothing was changed in Teams yet because DRY_RUN was on.
+
+The summary line at the end tells you exactly what happened:
+- **Total** — how many users were processed
+- **Uploaded** — photos successfully updated in Teams
+- **Unchanged** — users whose photo was already up to date (skipped)
+- **Failed** — users that encountered an error (check the lines above for details)
+- **NoAvatar** — users with no photo in HiBob
+- **NoEmail** — users with no email address (can't match to a Teams account)
+
+---
+
+## Understanding Build Status
+
+After each run, Jenkins marks the build with a colour-coded status. Here's what each one means:
+
+| Status | Colour | What it means |
+|--------|--------|---------------|
+| **SUCCESS** | Green | All users were processed without errors |
+| **UNSTABLE** | Yellow | The sync ran to completion, but some users failed — check the console output for lines containing `[ERROR]` or `[WARN]` to see which users were affected and why |
+| **FAILURE** | Red | The pipeline itself crashed before finishing — check the console output for the error that caused it (e.g. missing credentials, PowerShell not installed, network error) |
+
+> **UNSTABLE is not a disaster.** It means the pipeline did its job but hit a problem with specific users (for example, a user exists in HiBob but not in Entra ID). The rest of the users were still synced. Review the failed users and re-run or investigate individually.
+
+---
+
+## Pipeline Options
+
+The pipeline is configured with the following built-in protections:
+
+| Option | Value | What it means |
+|--------|-------|---------------|
+| **Timeout** | 30 minutes | If a run takes longer than 30 minutes, Jenkins cancels it automatically — prevents hung builds from blocking the agent indefinitely |
+| **Concurrent builds** | Disabled | Only one instance of this job can run at a time — prevents two syncs from racing each other and causing duplicate updates |
+| **Log rotation** | Keeps last 30 builds | Jenkins automatically deletes older build logs to save disk space |
+
+These are set in the pipeline itself (`HiBobTeamsSync.groovy`) and apply automatically — you don't need to configure them in the Jenkins UI.
 
 ---
 

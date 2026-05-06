@@ -29,6 +29,22 @@ These happen before the PowerShell script even runs — usually a misconfigurati
 
 ---
 
+### "Missing required environment variable for live run: ENTRAID_CLIENT_SECRET"
+
+**Full error in console:**
+```
+[ERROR] [Main] Missing required environment variable for live run: ENTRAID_CLIENT_SECRET
+```
+
+**Why:** When `DRY_RUN` is unchecked, the script now validates all three Graph credentials (`ENTRAID_CLIENT_ID`, `ENTRAID_CLIENT_SECRET`, `ENTRAID_TENANT_ID`) before starting — not just when the Graph call is made. This means a missing credential fails fast at startup rather than partway through the sync.
+
+**Fix:**
+1. Go to **Manage Jenkins → Credentials → System → Global credentials**
+2. Confirm all four credentials exist with the exact IDs listed in the table below
+3. If a credential is missing, add it — see the "Missing required environment variable: HIBOB_TOKEN" entry below for the full credential ID table
+
+---
+
 ### "Missing required environment variable: HIBOB_TOKEN"
 
 **Full error in console:**
@@ -57,6 +73,80 @@ The same applies to the other three credentials:
 
 ---
 
+### "ERROR: This pipeline requires Linux"
+
+**Full error in console:**
+```
+ERROR: This pipeline requires Linux. Detected OS: Darwin
+```
+
+**Why:** The Validate Environment stage checks `uname -s` and requires the result to be `Linux`. The pipeline will not run on macOS or Windows agents.
+
+**Fix:** Assign the job to a Linux agent. In Jenkins, either:
+- Set the agent label in the job configuration to a node that runs Linux
+- Or provision a Linux agent and connect it to Jenkins before running the job
+
+---
+
+### "ERROR: PowerShell Core (pwsh) is not installed"
+
+**Full error in console:**
+```
+ERROR: PowerShell Core (pwsh) is not installed on this agent.
+Install: https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell-on-linux
+```
+
+**Why:** The `pwsh` binary is not on the PATH of the Jenkins agent.
+
+**Fix — Ubuntu/Debian:**
+```bash
+wget -q https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb
+sudo dpkg -i packages-microsoft-prod.deb
+sudo apt-get update
+sudo apt-get install -y powershell
+pwsh --version
+```
+
+After installing, restart the Jenkins agent service so it picks up the new PATH:
+```bash
+sudo systemctl restart jenkins   # Linux with systemd
+```
+
+---
+
+### "WARNING: PowerShell X.Y detected. Recommended: 7.4 or later"
+
+**Full warning in console:**
+```
+WARNING: PowerShell 7.2 detected. Recommended: 7.4 or later.
+```
+
+**Why:** The installed version of PowerShell is older than 7.4. This is a warning only — the pipeline will still run. However, older versions may have subtle differences in module compatibility or error handling.
+
+**Fix:** Upgrade PowerShell on the agent to 7.4 or later using the same install steps above. Not required immediately, but recommended before issues arise.
+
+---
+
+### "ERROR: Microsoft.Graph.Users PowerShell module is not installed"
+
+**Full error in console:**
+```
+ERROR: Microsoft.Graph.Users PowerShell module is not installed on this agent.
+Required for live runs (DRY_RUN=false).
+Install: pwsh -Command "Install-Module Microsoft.Graph -Scope CurrentUser"
+```
+
+**Why:** The Microsoft Graph PowerShell SDK is missing on the Jenkins agent. This check only runs when `DRY_RUN` is unchecked — dry runs skip it entirely.
+
+**Fix — run this once on the Jenkins agent machine as the user Jenkins runs as:**
+```bash
+sudo -u jenkins pwsh -Command "Install-Module Microsoft.Graph -Scope CurrentUser -Force -AllowClobber"
+```
+
+If Jenkins runs as your own user, omit `sudo -u jenkins`. After installing, re-run the pipeline.
+
+---
+
 ### "pwsh: command not found" or "Cannot find pwsh"
 
 **Why:** PowerShell Core is not installed on the Jenkins agent (the machine running the job).
@@ -68,11 +158,6 @@ sudo dpkg -i packages-microsoft-prod.deb
 sudo apt-get update
 sudo apt-get install -y powershell
 pwsh --version
-```
-
-**Fix — macOS:**
-```bash
-brew install --cask powershell
 ```
 
 After installing, restart the Jenkins agent service so it picks up the new PATH:
@@ -216,14 +301,14 @@ These appear as `[ERROR] [GraphService]`.
 
 ---
 
-### "Cannot find module Microsoft.Graph"
+### "Cannot find module Microsoft.Graph" (runtime import error)
 
 **Full error:**
 ```
 Import-Module : The specified module 'Microsoft.Graph' was not found.
 ```
 
-**Why:** The Microsoft Graph PowerShell SDK isn't installed on the Jenkins agent.
+**Why:** The Microsoft Graph PowerShell SDK isn't installed on the Jenkins agent. The Validate Environment stage now catches this before the sync runs (see "ERROR: Microsoft.Graph.Users PowerShell module is not installed" in Section 1), but if you bypassed that stage or are running the script directly, you may see this error at runtime.
 
 **Fix — run this once on the Jenkins agent machine:**
 ```bash
@@ -283,7 +368,99 @@ sudo -u jenkins pwsh -Command "Install-Module Microsoft.Graph -Scope CurrentUser
 [INFO] [HiBobService] Fetching employees...
 ```
 
-**This is normal.** The retry logic caught a transient network hiccup and recovered on its own. No action needed. If you see this frequently (every run), it may indicate network instability between Jenkins and the HiBob API.
+**This is normal.** The retry logic caught a transient failure and recovered on its own. No action needed. If you see this frequently (every run), it may indicate network instability between Jenkins and the HiBob API.
+
+**What gets retried:** Only transient errors — HTTP 429 (rate limit), HTTP 5xx (server errors), and network-level failures (no HTTP response). The script respects `Retry-After` headers on 429 responses.
+
+**What does NOT get retried:** HTTP 4xx client errors (401 Unauthorized, 403 Forbidden, 404 Not Found). These are permanent errors and the script fails immediately rather than retrying. See "Non-retryable error for OperationName (HTTP 4xx)" below.
+
+**Security note:** Any Bearer tokens that appear in error messages are automatically redacted to `Bearer [REDACTED]` in the retry log lines.
+
+---
+
+### "Build is UNSTABLE (yellow)"
+
+**Why:** One or more users failed to sync, but the pipeline did not crash. The PowerShell script exits with code `2` when any individual user fails, and Jenkins translates that into an UNSTABLE (yellow) build rather than a FAILURE (red) build.
+
+**What to do:**
+1. Open the build → **Console Output**
+2. Search for `[ERROR]` lines — each failed user will have one
+3. The final summary line shows the total count:
+   ```
+   [INFO] [Sync] Sync complete. Total=50 Uploaded=45 Unchanged=3 Failed=2 NoAvatar=0 NoEmail=0
+   ```
+4. Fix the underlying cause for each failed user (see the relevant error entry in this guide)
+
+A yellow build means the majority of users synced successfully. It is not a full outage.
+
+---
+
+### "Avatar too large for user@company.com (X.XXMB > 4MB) — skipping"
+
+**Full warning in console:**
+```
+[WARN] [GraphService] Avatar too large for user@company.com (5.12MB > 4MB) — skipping
+```
+
+**Why:** The Microsoft Graph API rejects profile photos larger than 4 MB. The script validates the file size before attempting the upload and skips oversized files rather than failing.
+
+**Fix:** This cannot be resolved from the Jenkins side. The source image in HiBob needs to be replaced with a smaller one. Ask the employee (or an HR admin) to upload a smaller profile photo in HiBob. JPEG files under 1 MB are typical.
+
+---
+
+### "Empty avatar file for user@company.com — skipping"
+
+**Full warning in console:**
+```
+[WARN] [GraphService] Empty avatar file for user@company.com — skipping
+```
+
+**Why:** HiBob returned a zero-byte file when the avatar was downloaded. This is usually a temporary issue on the HiBob side (e.g. a CDN hiccup or a partially uploaded image).
+
+**Fix:** No immediate action needed. The next scheduled run will retry the download. If the warning persists for the same user across multiple runs, check that the employee's profile photo in HiBob is a valid image file.
+
+---
+
+### "Photo unchanged for user@company.com — skipping"
+
+**Full log line in console:**
+```
+[INFO] [GraphService] Photo unchanged for user@company.com — skipping
+```
+
+**This is not an error.** The script downloaded the current Teams photo and compared its MD5 hash against the HiBob avatar. They matched, so the upload was skipped. This is expected behaviour and saves unnecessary API calls. The user's photo is already up to date in Teams.
+
+---
+
+### "Non-retryable error for OperationName (HTTP 4xx)"
+
+**Full error in console:**
+```
+[ERROR] [Retry] Non-retryable error for Upload-Photo(user@company.com) (HTTP 403): Insufficient privileges...
+```
+
+**Why:** A 4xx HTTP error was returned. These are client errors (bad credentials, missing permissions, resource not found) that will not resolve on their own, so the script does not retry them. Only 429 and 5xx errors are retried.
+
+**Fix by status code:**
+
+| Code | Meaning | Fix |
+|------|---------|-----|
+| 401 | Unauthorized | Client secret expired or wrong — see "Authentication Failed" in Section 3 |
+| 403 | Forbidden | Missing Graph permission — see "Insufficient privileges" in Section 3 |
+| 404 | Not Found | User's email in HiBob doesn't match their Entra ID UPN — see "Resource not found" in Section 3 |
+
+---
+
+### "Invalid MAX_USERS value 'abc', defaulting to 0 (unlimited)"
+
+**Full warning in console:**
+```
+[WARN] [Main] Invalid MAX_USERS value 'abc', defaulting to 0 (unlimited)
+```
+
+**Why:** The `MAX_USERS` pipeline parameter was set to a non-numeric value. The script could not parse it as an integer and fell back to `0` (unlimited), so all employees were processed.
+
+**Fix:** Open the job → **Build with Parameters** → set `MAX_USERS` to a valid whole number (e.g. `10`) or `0` for unlimited. Do not enter letters or special characters.
 
 ---
 
@@ -292,15 +469,17 @@ sudo -u jenkins pwsh -Command "Install-Module Microsoft.Graph -Scope CurrentUser
 If you can't find your error above, run through this checklist:
 
 ```
+[ ] Pipeline agent is running Linux (uname -s returns Linux)
 [ ] Console Output shows [ERROR] — what is the exact message?
 [ ] All 4 Jenkins credentials exist with the correct IDs
 [ ] HiBob service user is active and has People read permissions
 [ ] Azure client secret has not expired
 [ ] Azure app has User.ReadWrite.All with admin consent granted
 [ ] pwsh --version returns 7.x on the Jenkins agent
-[ ] Microsoft.Graph module is installed on the agent
+[ ] Microsoft.Graph module is installed on the agent (required for live runs)
 [ ] DRY_RUN is unchecked for live runs
 [ ] TEST_USER_EMAIL is empty for full-company runs
+[ ] Build status: green = all users synced, yellow = partial failure (check [ERROR] lines), red = pipeline crashed
 ```
 
 ---

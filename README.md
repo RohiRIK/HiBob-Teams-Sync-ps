@@ -17,8 +17,13 @@ Automatically synchronize employee profile pictures from **HiBob** (HRIS) to **M
           │
           ▼
 ┌─────────────────────┐
+│ Validate Env Vars  │  HIBOB_TOKEN, ENTRAID_*, etc.
+└─────────────────────┘
+          │
+          ▼
+┌─────────────────────┐
 │ Fetch Employees    │  POST /v1/people/search
-│ from HiBob         │
+│ from HiBob         │  (cursor-based pagination)
 └─────────────────────┘
           │
           ▼
@@ -36,22 +41,59 @@ Automatically synchronize employee profile pictures from **HiBob** (HRIS) to **M
           │No                        │
           ▼                         ▼
 ┌─────────────────────┐    ┌─────────────────────┐
-│ Skip User          │    │ Upload to Teams     │  PUT /users/{id}/photo
+│ Skip (No Avatar)   │    │ Validate Size       │  Reject empty or >4MB
 └─────────────────────┘    └─────────────────────┘
                                     │
-                                    ▼
-                           ┌─────────────────────┐
-                           │       End           │
-                           └─────────────────────┘
+                              ┌─────┴─────┐
+                              │ Valid?    │
+                              └─────┬─────┘
+                           No ──────┘──────── Yes
+                           │                  │
+                           ▼                  ▼
+                  ┌──────────────┐   ┌─────────────────────┐
+                  │ Skip (Size) │   │ Compare with        │  MD5 hash vs
+                  └──────────────┘   │ Current Photo       │  current Graph photo
+                                     └─────────────────────┘
+                                               │
+                                     ┌─────────┴──────────┐
+                                     │ Changed?           │
+                                     └─────────┬──────────┘
+                                  No ──────────┘──────────── Yes
+                                  │                          │
+                                  ▼                          ▼
+                         ┌──────────────────┐    ┌─────────────────────┐
+                         │ Skip (Unchanged) │    │ Upload to Teams     │  PUT /users/{id}/photo
+                         └──────────────────┘    └─────────────────────┘
+                                                           │
+                                                           ▼
+                                                  ┌─────────────────────┐
+                                                  │ Summary Report      │
+                                                  │ Uploaded/Unchanged/ │
+                                                  │ Failed/Skipped      │
+                                                  └─────────────────────┘
 ```
+
+## ✨ Features
+
+*   **Cursor-based pagination** — fetches all employees from large tenants in pages of 100, following `next_cursor` until exhausted.
+*   **Smart retry with exponential backoff** — retries transient failures (HTTP 429, 5xx, network errors) up to 3 times; respects `Retry-After` headers on rate-limit responses. Non-retryable errors (4xx) fail immediately.
+*   **Image validation** — rejects empty files and avatars exceeding the 4 MB Graph API limit before attempting an upload.
+*   **Change detection** — downloads the current Teams photo and compares MD5 hashes; skips the upload if the photo is already up to date.
+*   **Summary reporting** — logs a final count of `Uploaded / Unchanged / Failed / NoAvatar / NoEmail` after every run.
+*   **Environment validation** — checks all required env vars before starting; Graph credentials are only required for live (non-dry-run) runs.
+*   **Partial failure handling** — exits with code `2` when any user fails, signalling Jenkins to mark the build `UNSTABLE` rather than `FAILURE`.
 
 ## ⚙️ Technical Flow
 
 ### 1. Fetch Employees
 ```
-GET https://api.hibob.com/v1/people/search
+POST https://api.hibob.com/v1/people/search
 Authorization: {HIBOB_TOKEN}
+Content-Type: application/json
+
+Body: { "showInactive": false, "pagination": { "limit": 100, "cursor": "<next_cursor>" } }
 ```
+Pages are fetched in a loop until `response_metadata.next_cursor` is absent.
 
 ### 2. Get Avatar URL
 ```
