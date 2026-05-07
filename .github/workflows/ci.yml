@@ -1,0 +1,69 @@
+# Template from Automations workspace — see RULES.md for conventions
+"on":
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      # Check out the repository so the analyzer can inspect source files; adjust if you need submodules.
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Install the PowerShell analyzer locally; add a version pin if you need stricter reproducibility.
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: pwsh -Command "Install-Module PSScriptAnalyzer -Force -Scope CurrentUser"
+
+      # Run linting against the source tree; customize the path if your project layout differs.
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: pwsh -Command "Invoke-ScriptAnalyzer -Path ./src -Recurse -Severity Error,Warning -ReportSummary"
+
+  test:
+    runs-on: ubuntu-latest
+    needs:
+      - lint
+    steps:
+      # Check out the repository before running tests; keep this step if you add test fixtures or modules.
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Install Pester 5.x for CI test execution; update the minimum version if your suite needs newer features.
+      - name: Install Pester
+        shell: pwsh
+        run: pwsh -Command "Install-Module Pester -Force -Scope CurrentUser -MinimumVersion 5.0"
+
+      # Execute the test suite in CI mode; change the path if your tests live elsewhere.
+      - name: Run Pester tests
+        shell: pwsh
+        run: pwsh -Command "Invoke-Pester ./tests/ -Output Detailed -CI"
+
+      # Upload the XML test report so CI logs and artifacts stay available for troubleshooting.
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pester-test-results
+          path: ./TestResults.xml
+
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      # Check out full history so TruffleHog can inspect commits as well as the working tree.
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Scan the repository for verified secrets; narrow the path if you want to scope the scan.
+      - name: Run TruffleHog
+        uses: trufflesecurity/trufflehog@v3.82.13
+        with:
+          path: ./
+          only-verified: true
