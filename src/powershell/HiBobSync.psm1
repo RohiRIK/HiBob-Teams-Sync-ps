@@ -109,6 +109,10 @@ function Get-HiBobAvatar {
 }
 
 function Connect-ToGraph {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSAvoidUsingConvertToSecureStringWithPlainText', '',
+        Justification = 'ClientSecret is a Jenkins env var (plain string) — conversion is required for PSCredential; no alternative at this system boundary'
+    )]
     param ([string]$ClientId, [string]$ClientSecret, [string]$TenantId)
     Write-Log "INFO" "GraphService" "Authenticating to Microsoft Graph..."
 
