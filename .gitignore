@@ -13,3 +13,10 @@ credentials.json
 .claude/
 AGENTS.md
 CLAUDE.md
+.aegis/
+aegis-policy.json
+.opencode/
+opencode.json
+.pre-commit-config.yaml
+.trufflehogignore
+.env.schema
